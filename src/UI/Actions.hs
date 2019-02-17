@@ -59,6 +59,7 @@ module UI.Actions (
   , createAttachments
   , delete
   , applySearch
+  , openWithCommand
   ) where
 
 import Data.Functor.Identity (Identity(..))
@@ -101,7 +102,6 @@ import Data.Text.Zipper
        (insertMany, currentLine, gotoEOL, clearZipper)
 import Data.Time.Clock (getCurrentTime)
 
-import Data.RFC5322 (Message(..))
 import qualified Data.RFC5322.Address.Text as AddressText (renderMailboxes)
 import Data.MIME
        (createMultipartMixedMessage, contentTypeApplicationOctetStream,
@@ -113,7 +113,7 @@ import Data.MIME
         WireEntity, DispositionType(..), ContentType(..), Mailbox(..))
 import qualified Storage.Notmuch as Notmuch
 import Storage.ParsedMail
-       (parseMail, getTo, getFrom, getSubject, toQuotedMail)
+       (parseMail, getTo, getFrom, getSubject, toQuotedMail, entityToBytes)
 import Types
 import Error
 import UI.Utils (selectedFiles, takeFileName)
@@ -122,6 +122,7 @@ import UI.Views
         focusedViewWidget)
 import Purebred.Tags (parseTagOps)
 import Purebred.System.Directory (listDirectory')
+import Purebred.System.Process (tryRunProcess, handleIOException, handleExitCode)
 
 class Scrollable (n :: Name) where
   makeViewportScroller :: Proxy n -> Brick.ViewportScroll Name
@@ -182,6 +183,10 @@ instance Completable 'ManageFileBrowserSearchPath where
     <$> (either setError updateBrowseFileContents
          <$> runExceptT (listDirectory' (currentLine $ view (asFileBrowser . fbSearchPath . E.editContentsL) s)))
 
+instance Completable 'MailAttachmentOpenWithEditor where
+  complete _ = pure
+               . set (asViews . vsViews . at ViewMail . _Just . vWidgets . ix MailAttachmentOpenWithEditor . veState) Hidden
+
 -- | Generalisation of reset actions, whether they reset editors back to their
 -- initial state or throw away composed, but not yet sent mails.
 --
@@ -216,6 +221,10 @@ instance Resetable 'ManageFileBrowserSearchPath where
 
 instance Resetable 'MailListOfAttachments where
   reset _ = pure . set (asViews . vsViews . at ViewMail . _Just . vWidgets . ix MailListOfAttachments . veState) Hidden
+
+instance Resetable 'MailAttachmentOpenWithEditor where
+  reset _ = pure . over (asMailView . mvOpenCommand . E.editContentsL) clearZipper
+            . set (asViews . vsViews . at ViewMail . _Just . vWidgets . ix MailAttachmentOpenWithEditor . veState) Hidden
 
 clearMailComposition :: AppState -> AppState
 clearMailComposition s =
@@ -289,6 +298,10 @@ instance Focusable 'ViewMail 'ListOfMails where
 instance Focusable 'ViewMail 'MailListOfAttachments where
   switchFocus _ _ = pure . set (asViews . vsViews . at ViewMail . _Just . vFocus) MailListOfAttachments
                     . set (asViews . vsViews . at ViewMail . _Just . vWidgets . ix MailListOfAttachments . veState) Visible
+
+instance Focusable 'ViewMail 'MailAttachmentOpenWithEditor where
+  switchFocus _ _ = pure . set (asViews . vsViews . at ViewMail . _Just . vFocus) MailAttachmentOpenWithEditor
+                    . set (asViews . vsViews . at ViewMail . _Just . vWidgets . ix MailAttachmentOpenWithEditor . veState) Visible
 
 instance Focusable 'Help 'ScrollingHelpView where
   switchFocus _ _ = pure . over (asViews . vsFocusedView) (Brick.focusSetCurrent Help)
@@ -375,6 +388,9 @@ instance HasName 'ManageFileBrowserSearchPath where
 instance HasName 'MailListOfAttachments where
   name _ = MailListOfAttachments
 
+instance HasName 'MailAttachmentOpenWithEditor where
+  name _ = MailAttachmentOpenWithEditor
+
 -- | Allow to change the view to a different view in order to put the focus on a widget there
 class ViewTransition (v :: ViewName) (v' :: ViewName) where
   transitionHook :: Proxy v -> Proxy v' -> AppState -> AppState
@@ -443,6 +459,15 @@ invokeEditor = Action ["invoke external editor"] (Brick.suspendAndResume . liftI
 
 edit :: Action 'ComposeView 'ComposeListOfAttachments (T.Next AppState)
 edit = Action ["edit file"] (Brick.suspendAndResume . liftIO . editAttachment)
+
+openWithCommand :: Action 'ViewMail 'MailAttachmentOpenWithEditor (T.Next AppState)
+openWithCommand =
+  Action
+  { _aDescription = ["pass to external command"]
+  , _aAction = \s ->
+    let cmd = view (asMailView . mvOpenCommand . E.editContentsL . to (T.unpack . currentLine)) s
+    in Brick.suspendAndResume $ liftIO $ openCommand' s cmd
+  }
 
 chain :: Action v ctx AppState -> Action v ctx a -> Action v ctx a
 chain (Action d1 f1) (Action d2 f2) = Action (d1 <> d2) (f1 >=> f2)
@@ -902,6 +927,14 @@ invokeEditor' s = do
       let mail = createTextPlainMessage contents
       pure $ s & over (asCompose . cAttachments) (upsertPart mail)
 
+openCommand' :: AppState -> FilePath -> IO AppState
+openCommand' s cmd
+  | null cmd = pure $ s & setError (GenericError "Empty command")
+  | otherwise = liftIO $ do
+      let maybeEntity = preview (asMailView . mvAttachments . to L.listSelectedElement . _Just . _2) s
+      f <- getTempFileForEditing maybeEntity
+      tryRunProcess (proc cmd [f]) >>= either (handleIOException s) (pure . handleExitCode s)
+
 removeIfExists :: FilePath -> IO ()
 removeIfExists fp = removeFile fp `catch` handleError
   where
@@ -933,10 +966,10 @@ upsertPart newPart list =
 -- return an empty filepath
 getTempFileForEditing :: Maybe WireEntity -> IO String
 getTempFileForEditing m = do
-    tempfile <- getTemporaryDirectory >>= \tdir -> emptyTempFile tdir "purebred.txt"
+    tempfile <- getTemporaryDirectory >>= \tdir -> emptyTempFile tdir "purebred"
     f tempfile m
  where
-   f fp (Just (Message _ body)) = B.writeFile fp body >> pure fp
+   f fp (Just entity) = either (\_ -> pure fp) (\x -> B.writeFile fp x >> pure fp) (entityToBytes entity)
    f fp _ = pure fp
 
 getTextPlainPart :: MIMEMessage -> Maybe WireEntity
