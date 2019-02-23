@@ -83,7 +83,7 @@ import Data.Vector.Lens (vector)
 import System.Exit (ExitCode(..))
 import System.IO (openTempFile, hClose)
 import System.Directory (getTemporaryDirectory, removeFile)
-import System.Process.Typed (proc, runProcess)
+import System.Process.Typed (proc)
 import System.FilePath (takeDirectory, (</>))
 import qualified Data.Vector as Vector
 import Prelude hiding (readFile, unlines)
@@ -914,16 +914,16 @@ initialCompose mailboxes =
 invokeEditor' :: AppState -> IO AppState
 invokeEditor' s = do
   let editor = view (asConfig . confEditor) s
-  let m = preview (asCompose . cAttachments . to L.listSelectedElement
+  let maybeEntity = preview (asCompose . cAttachments . to L.listSelectedElement
                      . _Just . _2 . to getTextPlainPart . _Just) s
-  tmpfile <- getTempFileForEditing m
-  status <- runProcess (proc editor [tmpfile])
-  case status of
-    ExitFailure _ -> pure $ s & over (asViews . vsFocusedView) (Brick.focusSetCurrent Mails)
-                              & setError editorError
-    ExitSuccess -> do
-      contents <- T.readFile tmpfile
-      removeIfExists tmpfile
+  tmpfile <- getTempFileForEditing maybeEntity
+  tryRunProcess (proc editor [tmpfile]) >>= either (handleIOException s) (handleExit tmpfile)
+  where
+    handleExit _ (ExitFailure _) = pure $ s & over (asViews . vsFocusedView) (Brick.focusSetCurrent Mails)
+                                      & setError editorError
+    handleExit tmpf' ExitSuccess = do
+      contents <- T.readFile tmpf'
+      removeIfExists tmpf'
       let mail = createTextPlainMessage contents
       pure $ s & over (asCompose . cAttachments) (upsertPart mail)
 
