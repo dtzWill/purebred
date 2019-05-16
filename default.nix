@@ -31,7 +31,7 @@
 #
 # $ nix-shell default.nix
 #
-{ compiler ? null, nixpkgs ? null, with-icu ? false }:
+{ compiler ? null, nixpkgs ? null, with-icu ? false, neverShell ? false }:
 
 with (import .nix/nixpkgs.nix { inherit compiler nixpkgs; });
 
@@ -48,8 +48,8 @@ let
     pkgs.notmuch
     pkgs.tmux
   ];
-in
-    if pkgs.lib.inNixShell
+  in
+    if !neverShell && pkgs.lib.inNixShell
     then haskellPackages.shellFor {
       withHoogle = true;
       packages = haskellPackages: [ haskellPackages.purebred ] ++ icuPackageDep haskellPackages;
