@@ -84,15 +84,15 @@ solarizedDark :: A.AttrMap
 solarizedDark =
     A.attrMap
         V.defAttr
-        [ (listAttr, V.brightBlue `on` V.brightBlack)
-        , (listSelectedAttr, V.white `on` V.yellow)
+        [ (listAttr, V.brightBlue `on` V.black)
+        , (listSelectedAttr, V.white `on` (V.Color240 3))
         , (listNewMailAttr, fg V.white `V.withStyle` V.bold)
-        , (listNewMailSelectedAttr, V.white `on` V.yellow `V.withStyle` V.bold)
+        , (listNewMailSelectedAttr, V.white `on` (V.Color240 3) `V.withStyle` V.bold)
         , (mailTagAttr, fg V.cyan)
         , (mailAuthorsAttr, fg V.white)
-        , (E.editFocusedAttr, V.white `on` V.brightBlack)
-        , (editorAttr, V.brightBlue `on` V.brightBlack)
-        , (editorLabelAttr, V.brightYellow `on` V.brightBlack)
+        , (E.editFocusedAttr, V.white `on` V.black)
+        , (editorAttr, V.brightBlue `on` V.black)
+        , (editorLabelAttr, V.brightYellow `on` V.black)
         , (editorErrorAttr, fg V.red)
         , (statusbarErrorAttr, bg V.red)
         , (statusbarAttr, V.black `on` V.brightYellow)
