@@ -1,5 +1,5 @@
 -- This file is part of purebred
--- Copyright (C) 2017-2019 Róman Joost and Fraser Tweedale
+-- Copyright (C) 2017-2020 Róman Joost and Fraser Tweedale
 --
 -- purebred is free software: you can redistribute it and/or modify
 -- it under the terms of the GNU Affero General Public License as published by
@@ -72,6 +72,7 @@ module UI.Actions (
   , toggleHeaders
   , switchComposeEditor
   , replyMail
+  , encapsulateMail
   , selectNextUnread
   , composeAsNew
   , createAttachments
@@ -145,12 +146,12 @@ import Data.MIME
         contentDisposition, dispositionType, headers, filename,
         parseContentType, attachments, entities, matchContentType,
         contentType, mailboxList, renderMailboxes, addressList, renderAddresses,
-        renderRFC5422Date, MIMEMessage, WireEntity, DispositionType(..),
+        renderRFC5422Date, encapsulate, MIMEMessage, WireEntity, DispositionType(..),
         ContentType(..), Mailbox(..),
         CharsetLookup)
 import qualified Storage.Notmuch as Notmuch
 import Storage.ParsedMail
-       ( parseMail, getTo, getFrom, getSubject, toQuotedMail
+       ( parseMail, getTo, getFrom, getSubject, getForwardedSubject, toQuotedMail
        , entityToBytes, toMIMEMessage, takeFileName, bodyToDisplay
        , removeMatchingWords, findMatchingWords, makeScrollSteps
        , writeEntityToPath)
@@ -308,8 +309,11 @@ completeMailTags s =
                       <$> selectedItemHelper (asMailIndex . miListOfMails) s (manageMailTags s ops')
 
 instance Completable 'ComposeTo where
-  complete _ = pure . set (asViews . vsViews . at ComposeView . _Just
-                           . vLayers . ix 1 . ix ComposeTo . veState) Hidden
+  complete _ = pure
+               . set (asViews . vsViews . at ComposeView . _Just
+                      . vLayers . ix 1 . ix ComposeTo . veState) Hidden
+               . set (asViews . vsViews . at ViewMail . _Just
+                      . vLayers . ix 0 . ix ComposeTo . veState) Hidden
 
 instance Completable 'ComposeFrom where
   complete _ = pure . set (asViews . vsViews . at ComposeView . _Just
@@ -407,7 +411,7 @@ instance Resetable 'ComposeView 'ComposeTo where
 instance Resetable 'ComposeView 'ComposeSubject where
   reset _ _ s = pure $ s & over (asCompose . cSubject . E.editContentsL) (revertEditorContents s)
                 . set (asViews . vsViews . at ComposeView . _Just . vLayers . ix 1
-                       . ix ComposeTo . veState) Hidden
+                       . ix ComposeSubject . veState) Hidden
 
 revertEditorContents :: AppState -> TextZipper T.Text -> TextZipper T.Text
 revertEditorContents s z = let saved = view (asCompose . cTemp) s
@@ -447,6 +451,12 @@ instance Resetable 'ViewMail 'SaveToDiskPathEditor where
   reset _ _ = pure . over (asMailView . mvSaveToDiskPath . E.editContentsL) clearZipper
             . set (asViews . vsViews . at ViewMail . _Just . vLayers . ix 0
                    . ix SaveToDiskPathEditor . veState) Hidden
+
+instance Resetable 'ViewMail 'ComposeTo where
+  reset _ _ s = pure $ s & over (asCompose . cTo . E.editContentsL) (revertEditorContents s)
+                . set (asViews . vsViews . at ViewMail . _Just . vLayers . ix 0
+                       . ix ComposeTo . veState) Hidden
+                . clearMailComposition
 
 -- | Reset the composition state for a new mail
 --
@@ -535,6 +545,11 @@ instance Focusable 'ViewMail 'SaveToDiskPathEditor where
                            . ix SaveToDiskPathEditor . veState) Visible
                        . over (asMailView . mvSaveToDiskPath . E.editContentsL) (insertMany fname . clearZipper)
     in switch s
+
+instance Focusable 'ViewMail 'ComposeTo where
+  switchFocus _ _ = pure . set (asViews . vsViews . at ViewMail . _Just . vFocus) ComposeTo
+                    . set (asViews . vsViews . at ViewMail . _Just . vLayers . ix 0
+                           . ix ComposeTo . veState) Visible
 
 instance Focusable 'Help 'ScrollingHelpView where
   switchFocus _ _ = pure . over (asViews . vsFocusedView) (Brick.focusSetCurrent Help)
@@ -966,6 +981,24 @@ switchComposeEditor =
                           else pure s
     }
 
+-- | Update the AppState with a 'MIMEMessage'. The instance will have
+-- the current selected 'MIMEMessage' encapsulated as an @inline@
+-- message.
+encapsulateMail :: Action 'ViewMail 'ScrollingMailView AppState
+encapsulateMail =
+  Action
+    { _aDescription = ["forward selected e-mail"]
+    , _aAction =
+        \s ->
+          let createForwarded s' m = s'
+                & over (asCompose . cAttachments)
+                (L.listInsert 1 (encapsulate m) . L.listInsert 0 (createTextPlainMessage mempty))
+                . over (asCompose . cSubject . E.editContentsL)
+                (insertMany (getForwardedSubject m) . clearZipper)
+              handleError = setError (GenericError "No mail selected for forwarding")
+          in pure $ maybe (handleError s) (createForwarded s) $ view (asMailView . mvMail) s
+    }
+
 -- | Update the 'AppState' with a quoted form of the first preferred
 -- entity in order to reply to the e-mail.
 --
@@ -1142,8 +1175,7 @@ makeAttachmentsFromSelected s = do
     . set (asViews . vsViews . at ComposeView . _Just . vFocus) ComposeListOfAttachments
   where
     go :: [MIMEMessage] -> L.List Name MIMEMessage -> L.List Name MIMEMessage
-    go parts l = foldr (upsertPart charsets) l parts
-    charsets = view (asConfig . confCharsets) s
+    go parts l = foldr upsertPart l parts
     makeFullPath path = currentLine (view (asFileBrowser . fbSearchPath . E.editContentsL) s) </> path
 
 -- | Determine if the selected directory entry is a file or not. We do
@@ -1309,12 +1341,11 @@ replyToMail s =
       let mailboxes = view (asConfig . confComposeView . cvIdentities) s
           quoted = toQuotedMail mailboxes mbody pmail
           mbody = view (asMailView . mvBody) s
-          charsets = view (asConfig . confCharsets) s
        in s &
           over (asCompose . cTo . E.editContentsL) (insertMany (getTo quoted) . clearZipper)
           . over (asCompose . cFrom . E.editContentsL) (insertMany (getFrom quoted) . clearZipper)
           . over (asCompose . cSubject . E.editContentsL) (insertMany (getSubject quoted) . clearZipper)
-          . over (asCompose . cAttachments) (upsertPart charsets quoted)
+          . over (asCompose . cAttachments) (upsertPart quoted)
 
 -- | Build the MIMEMessage, sanitize filepaths, serialize and send it
 --
@@ -1422,11 +1453,10 @@ invokeEditor' s =
                              . _Just . _2 . to getTextPlainPart . _Just) s
       maildir = view (asConfig . confNotmuch . nmDatabase) s
       cmd = view (asConfig . confEditor) s
-      updatePart = over (asCompose . cAttachments) . upsertPart charsets . createTextPlainMessage
+      updatePart = over (asCompose . cAttachments) . upsertPart . createTextPlainMessage
       mkEntity :: (MonadError Error m) => m B.ByteString
       mkEntity = maybe (pure mempty) entityToBytes maybeEntity
       entityCmd = EntityCommand handleExitCodeTempfileContents (draftFileResoure maildir) (\_ fp -> proc cmd [fp]) tryReadProcessStderr
-      charsets = view (asConfig . confCharsets) s
   in
     either (`setError` s) (`updatePart` s)
     <$> runExceptT (mkEntity >>= runEntityCommand . entityCmd)
@@ -1486,16 +1516,14 @@ editAttachment s =
 -- is needed when editing parts during composition of an e-mail.
 --
 upsertPart ::
-     CharsetLookup
-  -> MIMEMessage
+  MIMEMessage
   -> L.List Name MIMEMessage
   -> L.List Name MIMEMessage
-upsertPart charsets newPart l =
+upsertPart newPart l =
   case L.listSelectedElement l of
     Nothing -> L.listInsert 0 newPart l
     Just (_, part) ->
-      if view (headers . contentDisposition . folded . filename charsets) part
-          == view (headers . contentDisposition . folded . filename charsets) newPart
+      if view headers part == view headers newPart
       then
         -- replace
         L.listModify (const newPart) l

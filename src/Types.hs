@@ -313,7 +313,7 @@ data NotmuchSettings a = NotmuchSettings
     , _nmDraftTag :: Tag
     , _nmSentTag :: Tag
     , _nmHasNewMailSearch :: T.Text
-    , _nmHasNewMailCheckDelay :: Maybe Int
+    , _nmHasNewMailCheckDelay :: Maybe Delay
     }
     deriving (Generic, NFData)
 
@@ -335,7 +335,7 @@ nmSentTag = lens _nmSentTag (\nm x -> nm { _nmSentTag = x })
 nmHasNewMailSearch :: Lens' (NotmuchSettings a) T.Text
 nmHasNewMailSearch = lens _nmHasNewMailSearch (\nm x -> nm { _nmHasNewMailSearch = x })
 
-nmHasNewMailCheckDelay :: Lens' (NotmuchSettings a) (Maybe Int)
+nmHasNewMailCheckDelay :: Lens' (NotmuchSettings a) (Maybe Delay)
 nmHasNewMailCheckDelay = lens _nmHasNewMailCheckDelay (\nm x -> nm { _nmHasNewMailCheckDelay = x })
 
 data FileBrowserSettings a = FileBrowserSettings
@@ -368,6 +368,11 @@ data Configuration extra a b c = Configuration
     , _confExtra :: extra  -- data specific to a particular "phase" of configuration
     }
     deriving (Generic, NFData)
+
+data Delay 
+  = Seconds Int 
+  | Minutes Int
+  deriving (Generic, NFData)
 
 type UserConfiguration = Configuration () (IO FilePath) (IO String) (IO FilePath)
 type InternalConfiguration = Configuration (BChan PurebredEvent, String) FilePath String FilePath
@@ -500,6 +505,8 @@ data MailViewSettings = MailViewSettings
     , _mvFindWordEditorKeybindings :: [Keybinding 'ViewMail 'ScrollingMailViewFindWordEditor]
     , _mvMailcap :: [(ContentType -> Bool, MailcapHandler)]
     , _mvSaveToDiskKeybindings :: [Keybinding 'ViewMail 'SaveToDiskPathEditor]
+    -- used for forwarding mails
+    , _mvToKeybindings :: [Keybinding 'ViewMail 'ComposeTo]
     }
     deriving (Generic, NFData)
 
@@ -538,6 +545,9 @@ mvMailcap = lens _mvMailcap (\s x -> s { _mvMailcap = x })
 
 mvSaveToDiskKeybindings :: Lens' MailViewSettings [Keybinding 'ViewMail 'SaveToDiskPathEditor]
 mvSaveToDiskKeybindings = lens _mvSaveToDiskKeybindings (\s x -> s { _mvSaveToDiskKeybindings = x })
+
+mvToKeybindings :: Lens' MailViewSettings [Keybinding 'ViewMail 'ComposeTo]
+mvToKeybindings = lens _mvToKeybindings (\s x -> s { _mvToKeybindings = x })
 
 hasCopiousoutput :: Traversal' [(ContentType -> Bool, MailcapHandler)] (ContentType -> Bool, MailcapHandler)
 hasCopiousoutput = traversed . filtered (view (_2 . mhCopiousoutput . to isCopiousOutput))
