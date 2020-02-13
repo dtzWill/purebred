@@ -13,8 +13,10 @@
 --
 -- You should have received a copy of the GNU Affero General Public License
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TypeApplications #-}
 
 module UI.App where
 
@@ -27,6 +29,7 @@ import qualified Brick.Widgets.Edit as E
 import qualified Brick.Widgets.List as L
 import qualified Graphics.Vty.Input.Events as Vty
 import Control.Lens ((&), set, view)
+import Control.Monad.State (execStateT)
 import qualified Data.Map as Map
 import Data.Time.Clock (UTCTime(..))
 import Data.Time.Calendar (fromGregorian)
@@ -76,29 +79,29 @@ renderWidget :: AppState -> ViewName -> Name -> Widget Name
 renderWidget s _ ListOfThreads = renderListOfThreads s
 renderWidget s ViewMail ListOfMails = vLimit (view (asConfig . confMailView . mvIndexRows) s) (renderListOfMails s)
 renderWidget s _ MailAttachmentOpenWithEditor =
-  renderEditorWithLabel (Proxy :: Proxy 'MailAttachmentOpenWithEditor) "Open with:" s
+  renderEditorWithLabel (Proxy @'MailAttachmentOpenWithEditor) "Open with:" s
 renderWidget s _ MailAttachmentPipeToEditor =
-  renderEditorWithLabel (Proxy :: Proxy 'MailAttachmentPipeToEditor) "Pipe to:" s
+  renderEditorWithLabel (Proxy @'MailAttachmentPipeToEditor) "Pipe to:" s
 renderWidget s _ ListOfMails = renderListOfMails s
 renderWidget s _ ComposeListOfAttachments = attachmentsEditor s
 renderWidget s _ MailListOfAttachments = renderAttachmentsList s
 renderWidget s _ ListOfFiles = renderFileBrowser s
 renderWidget s _ ManageFileBrowserSearchPath = renderFileBrowserSearchPathEditor s
 renderWidget s _ SaveToDiskPathEditor =
-  renderEditorWithLabel (Proxy :: Proxy 'SaveToDiskPathEditor) "Save to file:" s
+  renderEditorWithLabel (Proxy @'SaveToDiskPathEditor) "Save to file:" s
 renderWidget s _ SearchThreadsEditor =
-  renderEditorWithLabel (Proxy :: Proxy 'SearchThreadsEditor) "Query:" s
+  renderEditorWithLabel (Proxy @'SearchThreadsEditor) "Query:" s
 renderWidget s _ ManageMailTagsEditor =
-  renderEditorWithLabel (Proxy :: Proxy 'ManageMailTagsEditor) "Labels:" s
+  renderEditorWithLabel (Proxy @'ManageMailTagsEditor) "Labels:" s
 renderWidget s _ ManageThreadTagsEditor =
-  renderEditorWithLabel (Proxy :: Proxy 'ManageThreadTagsEditor) "Labels:" s
+  renderEditorWithLabel (Proxy @'ManageThreadTagsEditor) "Labels:" s
 renderWidget s _ ScrollingMailView = renderMailView s
 renderWidget s _ ScrollingMailViewFindWordEditor =
-  renderEditorWithLabel (Proxy :: Proxy 'ScrollingMailViewFindWordEditor) "Search for:" s
+  renderEditorWithLabel (Proxy @'ScrollingMailViewFindWordEditor) "Search for:" s
 renderWidget s _ ScrollingHelpView = renderHelp s
-renderWidget s _ ComposeFrom = renderEditorWithLabel (Proxy :: Proxy 'ComposeFrom) "From:" s
-renderWidget s _ ComposeTo = renderEditorWithLabel (Proxy :: Proxy 'ComposeTo) "To:" s
-renderWidget s _ ComposeSubject = renderEditorWithLabel (Proxy :: Proxy 'ComposeSubject) "Subject:" s
+renderWidget s _ ComposeFrom = renderEditorWithLabel (Proxy @'ComposeFrom) "From:" s
+renderWidget s _ ComposeTo = renderEditorWithLabel (Proxy @'ComposeTo) "To:" s
+renderWidget s _ ComposeSubject = renderEditorWithLabel (Proxy @'ComposeSubject) "Subject:" s
 renderWidget s _ ComposeHeaders = drawHeaders s
 renderWidget s _ StatusBar = statusbar s
 renderWidget s _ ConfirmDialog = renderConfirm s
@@ -190,7 +193,7 @@ initialState conf =
     epoch = UTCTime (fromGregorian 2018 07 18) 1
     async = Async Nothing
     s = AppState conf mi mv (initialCompose mailboxes) Nothing viewsettings fb epoch async
-  in applySearch s
+  in execStateT applySearch s
 
 -- | Application event loop.
 theApp ::

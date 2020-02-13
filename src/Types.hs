@@ -40,6 +40,7 @@ import Brick.Widgets.Dialog (Dialog)
 import Control.DeepSeq (NFData(rnf), force)
 import Control.Lens
 import qualified Data.Map as Map
+import Control.Monad.State
 import Control.Monad.Except (MonadError)
 import Control.Monad.Reader (MonadIO)
 import Control.Concurrent (ThreadId)
@@ -354,6 +355,11 @@ fbSearchPathKeybindings = lens _fbSearchPathKeybindings (\cv x -> cv { _fbSearch
 fbHomePath :: Lens (FileBrowserSettings a) (FileBrowserSettings a') a a'
 fbHomePath = lens _fbHomePath (\s a -> s { _fbHomePath = a })
 
+data Delay
+  = Seconds Int
+  | Minutes Int
+  deriving (Generic, NFData)
+
 data Configuration extra a b c = Configuration
     { _confTheme :: AttrMap
     , _confNotmuch :: NotmuchSettings a
@@ -369,13 +375,10 @@ data Configuration extra a b c = Configuration
     }
     deriving (Generic, NFData)
 
-data Delay 
-  = Seconds Int 
-  | Minutes Int
-  deriving (Generic, NFData)
+type InternalConfigurationFields = (BChan PurebredEvent, String, T.Text -> IO ())
 
 type UserConfiguration = Configuration () (IO FilePath) (IO String) (IO FilePath)
-type InternalConfiguration = Configuration (BChan PurebredEvent, String) FilePath String FilePath
+type InternalConfiguration = Configuration InternalConfigurationFields FilePath String FilePath
 
 type ConfigurationLens v = forall z a b c. Lens' (Configuration z a b c) v
 
@@ -417,6 +420,9 @@ confBChan = confExtra . _1
 
 confBoundary :: Lens' InternalConfiguration String
 confBoundary = confExtra . _2
+
+confLogSink :: Lens' InternalConfiguration (T.Text -> IO ())
+confLogSink = confExtra . _3
 
 
 data ComposeViewSettings = ComposeViewSettings
@@ -694,12 +700,18 @@ asAsync = lens _asAsync (\as x -> as { _asAsync = x })
 data Action (v :: ViewName) (ctx :: Name) a = Action
     { _aDescription :: [T.Text]
     -- ^ sequential list of things that the action does
-    , _aAction :: AppState -> EventM Name a
+    , _aAction :: StateT AppState (EventM Name) a
     }
-    deriving (Generic, NFData)
 
-aAction :: Getter (Action v ctx a) (AppState -> EventM Name a)
+instance NFData (Action v ctx a) where
+  rnf (Action desc (StateT f)) = Action (force desc) (StateT (force f)) `seq` ()
+
+aAction :: Getter (Action v ctx a) (StateT AppState (EventM Name) a)
 aAction = to (\(Action _ b) -> b)
+
+aDescription :: Getter (Action v ctx a) [T.Text]
+aDescription = to (\(Action a _ ) -> a)
+
 
 data Keybinding (v :: ViewName) (ctx :: Name) = Keybinding
     { _kbEvent :: Vty.Event
@@ -721,9 +733,6 @@ kbEvent = to (\(Keybinding b _) -> b)
 
 kbAction :: Getter (Keybinding v ctx) (Action v ctx (Next AppState))
 kbAction = to (\(Keybinding _ c) -> c)
-
-aDescription :: Getter (Action v ctx a) [T.Text]
-aDescription = to (\(Action a _ ) -> a)
 
 -- | an email from the notmuch database
 data NotmuchMail = NotmuchMail
